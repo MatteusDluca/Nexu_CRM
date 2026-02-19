@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+pnpm-lock.yaml
+yarn.lock
+package-lock.json
+
+# Builds
+dist/
+build/
+.next/
+out/
+
+# Environment
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Testing
+coverage/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# WhatsApp Session Data (CRITICALLY IMPORTANT TO IGNORE)
+auth_info_baileys/
+sessions/store.json
+
+# Media Storage (Uploaded files)
+media/uploads/*
+!media/uploads/.gitkeep
+media/downloads/*
+!media/downloads/.gitkeep
+
+# IDEs
+.vscode/
+.idea/

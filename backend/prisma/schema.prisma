@@ -1,0 +1,295 @@
+// ============================================================
+// WhatsApp CRM Multi-Atendente — Prisma Schema
+// Database: MongoDB 7.x com Replica Set
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// ENUMS
+// ============================================================
+
+enum Role {
+  USER
+  MANAGER
+  ADMIN
+}
+
+enum ConversationStatus {
+  OPEN
+  PENDING
+  CLOSED
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  VIDEO
+  AUDIO
+  DOCUMENT
+  STICKER
+  BUTTON
+  LIST
+  LOCATION
+  CONTACT
+}
+
+enum MessageStatus {
+  PENDING
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
+enum SessionStatus {
+  DISCONNECTED
+  CONNECTING
+  CONNECTED
+  QR_READY
+  ERROR
+}
+
+enum TransferStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  CANCELLED
+}
+
+// ============================================================
+// USER — Atendentes do sistema
+// ============================================================
+
+model User {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  name      String
+  email     String   @unique
+  password  String
+  role      Role     @default(USER)
+  avatar    String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relacionamentos
+  departmentId String?     @db.ObjectId
+  department   Department? @relation(fields: [departmentId], references: [id])
+
+  assignedConversations Conversation[] @relation("AssignedTo")
+  transfersFrom         Transfer[]     @relation("TransferFrom")
+  transfersTo           Transfer[]     @relation("TransferTo")
+
+  @@map("users")
+}
+
+// ============================================================
+// DEPARTMENT — Setores de atendimento
+// ============================================================
+
+model Department {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  name        String   @unique
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relacionamentos
+  users         User[]
+  conversations Conversation[]
+  transfersTo   Transfer[]     @relation("TransferToDept")
+
+  @@map("departments")
+}
+
+// ============================================================
+// WHATSAPP SESSION — Instâncias Baileys
+// ============================================================
+
+model WhatsAppSession {
+  id        String        @id @default(auto()) @map("_id") @db.ObjectId
+  name      String
+  phone     String?
+  status    SessionStatus @default(DISCONNECTED)
+  qrCode    String?
+  authState Json? // Auth state criptografado (creds + keys)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  // Relacionamentos
+  conversations Conversation[]
+  messages      Message[]
+
+  @@map("whatsapp_sessions")
+}
+
+// ============================================================
+// CONTACT — Contatos do CRM
+// ============================================================
+
+model Contact {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  name         String?
+  phone        String   @unique
+  email        String?
+  notes        String?
+  avatarUrl    String?
+  customFields Json? // Campos dinâmicos por organização
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relacionamentos
+  tagIds        String[]       @db.ObjectId
+  tags          Tag[]          @relation(fields: [tagIds], references: [id])
+  conversations Conversation[]
+  messages      Message[]
+
+  @@map("contacts")
+}
+
+// ============================================================
+// TAG — Etiquetas personalizáveis
+// ============================================================
+
+model Tag {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  name      String   @unique
+  color     String   @default("#6366f1") // Indigo default
+  iconUrl   String?
+  imageUrl  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relacionamentos
+  contactIds      String[]       @db.ObjectId
+  contacts        Contact[]      @relation(fields: [contactIds], references: [id])
+  conversationIds String[]       @db.ObjectId
+  conversations   Conversation[] @relation(fields: [conversationIds], references: [id])
+
+  @@map("tags")
+}
+
+// ============================================================
+// CONVERSATION — Conversas ativas
+// ============================================================
+
+model Conversation {
+  id           String             @id @default(auto()) @map("_id") @db.ObjectId
+  status       ConversationStatus @default(OPEN)
+  lastMessage  String?
+  unreadCount  Int                @default(0)
+  lastActivity DateTime           @default(now())
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  // Relacionamentos
+  sessionId String          @db.ObjectId
+  session   WhatsAppSession @relation(fields: [sessionId], references: [id])
+
+  contactId String  @db.ObjectId
+  contact   Contact @relation(fields: [contactId], references: [id])
+
+  assigneeId String? @db.ObjectId
+  assignee   User?   @relation("AssignedTo", fields: [assigneeId], references: [id])
+
+  departmentId String?     @db.ObjectId
+  department   Department? @relation(fields: [departmentId], references: [id])
+
+  tagIds String[] @db.ObjectId
+  tags   Tag[]    @relation(fields: [tagIds], references: [id])
+
+  messages  Message[]
+  transfers Transfer[]
+
+  @@index([contactId])
+  @@index([sessionId])
+  @@index([assigneeId])
+  @@index([status])
+  @@map("conversations")
+}
+
+// ============================================================
+// MESSAGE — Mensagens do WhatsApp
+// ============================================================
+
+model Message {
+  id         String        @id @default(auto()) @map("_id") @db.ObjectId
+  type       MessageType   @default(TEXT)
+  content    String?
+  mediaUrl   String?
+  caption    String?
+  status     MessageStatus @default(PENDING)
+  fromMe     Boolean       @default(false)
+  whatsappId String? // ID original do WhatsApp para tracking
+  timestamp  DateTime      @default(now())
+  createdAt  DateTime      @default(now())
+
+  // Relacionamentos
+  conversationId String       @db.ObjectId
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+
+  contactId String?  @db.ObjectId
+  contact   Contact? @relation(fields: [contactId], references: [id])
+
+  sessionId String          @db.ObjectId
+  session   WhatsAppSession @relation(fields: [sessionId], references: [id])
+
+  @@index([conversationId])
+  @@index([timestamp])
+  @@map("messages")
+}
+
+// ============================================================
+// TRANSFER — Transferências de conversa
+// ============================================================
+
+model Transfer {
+  id     String         @id @default(auto()) @map("_id") @db.ObjectId
+  reason String?
+  note   String?
+  status TransferStatus @default(PENDING)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relacionamentos
+  conversationId String       @db.ObjectId
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+
+  fromUserId String @db.ObjectId
+  fromUser   User   @relation("TransferFrom", fields: [fromUserId], references: [id])
+
+  toUserId String? @db.ObjectId
+  toUser   User?   @relation("TransferTo", fields: [toUserId], references: [id])
+
+  toDepartmentId String?     @db.ObjectId
+  toDepartment   Department? @relation("TransferToDept", fields: [toDepartmentId], references: [id])
+
+  @@index([conversationId])
+  @@map("transfers")
+}
+
+// ============================================================
+// BOT FLOW — Fluxos do construtor de bot
+// ============================================================
+
+model BotFlow {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  name        String
+  description String?
+  nodes       Json // Array de nodes do React Flow
+  edges       Json // Array de edges do React Flow
+  trigger     String? // Palavra-chave ou evento que inicia o fluxo
+  isActive    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("bot_flows")
+}

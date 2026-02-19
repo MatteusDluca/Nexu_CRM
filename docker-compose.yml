@@ -1,0 +1,158 @@
+# ============================================================
+# WhatsApp CRM Multi-Atendente — Docker Compose
+# Todos os serviços: MongoDB, Redis, Backend, Frontend, Log_Master
+# ============================================================
+
+services:
+  # ============================================================
+  # MongoDB 7 com Replica Set (obrigatório para Prisma)
+  # ============================================================
+  mongodb:
+    image: mongo:7
+    container_name: whatsapp-crm-mongodb
+    command: [ "--replSet", "rs0", "--bind_ip_all" ]
+    ports:
+      - "27018:27017"
+    volumes:
+      - mongo_data:/data/db
+      - ./scripts/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    healthcheck:
+      test: [ "CMD", "mongosh", "--eval", "db.adminCommand('ping')" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Script para inicializar o Replica Set
+  mongo-init-replica:
+    image: mongo:7
+    container_name: whatsapp-crm-mongo-init
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    command: >
+      mongosh --host mongodb:27017 --eval '
+        try {
+          rs.status();
+          print("Replica set already initialized");
+        } catch(e) {
+          rs.initiate({ _id: "rs0", members: [{ _id: 0, host: "mongodb:27017" }] });
+          print("Replica set initialized successfully");
+        }
+      '
+    restart: "no"
+
+  # ============================================================
+  # Redis 7 para BullMQ (filas de transferência, bot, mensagens)
+  # ============================================================
+  redis:
+    image: redis:7-alpine
+    container_name: whatsapp-crm-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ============================================================
+  # Backend — NestJS 11
+  # ============================================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: whatsapp-crm-backend
+    ports:
+      - "3001:3001"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mongo-init-replica:
+        condition: service_completed_successfully
+    environment:
+      - NODE_ENV=development
+      - PORT=3001
+      - DATABASE_URL=mongodb://mongodb:27017/whatsapp-crm?replicaSet=rs0&directConnection=true
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - JWT_SECRET=whatsapp-crm-jwt-secret-change-in-production
+      - JWT_REFRESH_SECRET=whatsapp-crm-refresh-secret-change-in-production
+      - JWT_EXPIRATION=15m
+      - JWT_REFRESH_EXPIRATION=7d
+      - LOG_MASTER_URL=http://log-master-backend:3000
+      - ENCRYPTION_KEY=whatsapp-crm-encryption-key-32chars!
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+    restart: unless-stopped
+
+  # ============================================================
+  # Frontend — Next.js 14
+  # ============================================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: whatsapp-crm-frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    environment:
+      - NODE_ENV=development
+      - NEXT_PUBLIC_API_URL=http://localhost:3001
+      - NEXT_PUBLIC_WS_URL=http://localhost:3001
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    restart: unless-stopped
+
+  # ============================================================
+  # Log_Master Backend (Observabilidade)
+  # ============================================================
+  log-master-backend:
+    build:
+      context: ./log-master/backend
+      dockerfile: Dockerfile
+    container_name: whatsapp-crm-logmaster-backend
+    ports:
+      - "3002:3000"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    environment:
+      - NODE_ENV=development
+      - MONGODB_URI=mongodb://mongodb:27017/log-master?replicaSet=rs0&directConnection=true
+      - PORT=3000
+    restart: unless-stopped
+
+  # ============================================================
+  # Log_Master Frontend (Dashboard de logs)
+  # ============================================================
+  log-master-frontend:
+    build:
+      context: ./log-master/frontend
+      dockerfile: Dockerfile
+    container_name: whatsapp-crm-logmaster-frontend
+    ports:
+      - "5173:5173"
+    depends_on:
+      - log-master-backend
+    environment:
+      - VITE_API_URL=http://localhost:3002
+      - VITE_WS_URL=http://localhost:3002
+    restart: unless-stopped
+
+volumes:
+  mongo_data:
+    driver: local
+  redis_data:
+    driver: local
